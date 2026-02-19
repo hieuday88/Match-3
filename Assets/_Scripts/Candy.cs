@@ -42,7 +42,7 @@ public class Candy : MonoBehaviour
         this.spriteRenderer.sprite = newSprite;
 
         // Có thể thêm hiệu ứng biến hình ở đây (ví dụ: scale to lên một chút rồi nhỏ lại)
-        transform.DOPunchScale(Vector3.one * 0.2f, 0.3f, 10, 1);
+        transform.DOPunchScale(Vector3.one * 0.2f, 0.6f, 10, 1);
     }
     public void Init(int x, int y)
     {

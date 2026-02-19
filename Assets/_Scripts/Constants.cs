@@ -12,8 +12,8 @@ public static class Constants
     public enum CandyType
     {
         PURPLE, // Index 0
-        BLUE,   // Index 1
-        GREEN,  // Index 2
+        GREEN,   // Index 1
+        BLUE,  // Index 2
         YELLOW, // Index 3
     }
 

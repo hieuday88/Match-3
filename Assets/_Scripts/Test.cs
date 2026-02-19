@@ -3,7 +3,7 @@ using UnityEngine;
 
 public class Test : MonoBehaviour
 {
-    public GameObject columnEffectPrefab;
+    public GameObject EffectPrefab;
     void Start()
     {
 
@@ -12,21 +12,23 @@ public class Test : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.Tab))
-            SweepRow(1);
+        if (Input.GetKeyDown(KeyCode.R))
+            SweepRow(0);
+        if (Input.GetKeyDown(KeyCode.C))
+            SweepColumn(0);
 
     }
 
     public void SweepColumn(int x)
     {
         Debug.Log("test");
-        float startY = 0;
-        float endY = (GameManager.Instance.gridManager.Height - 1) * Constants.TILE_SIZE;
+        float startY = -1;
+        float endY = 10 * Constants.TILE_SIZE;
 
         Vector3 startPos = new Vector3(x * Constants.TILE_SIZE, startY, 0);
         Vector3 endPos = new Vector3(x * Constants.TILE_SIZE, endY, 0);
 
-        GameObject effect = Instantiate(columnEffectPrefab);
+        GameObject effect = Instantiate(EffectPrefab);
         effect.transform.position = startPos;
 
         effect.transform.DOMove(endPos, 0.35f)
@@ -36,13 +38,13 @@ public class Test : MonoBehaviour
 
     public void SweepRow(int y)
     {
-        float startX = 0;
-        float endX = (GameManager.Instance.gridManager.Height - 1) * Constants.TILE_SIZE;
+        float startX = -1;
+        float endX = 10 * Constants.TILE_SIZE;
 
         Vector3 startPos = new Vector3(startX, y * Constants.TILE_SIZE, 0);
         Vector3 endPos = new Vector3(endX, y * Constants.TILE_SIZE, 0);
 
-        GameObject effect = Instantiate(columnEffectPrefab);
+        GameObject effect = Instantiate(EffectPrefab);
         effect.transform.position = startPos;
 
         effect.transform.DOMove(endPos, 0.35f)

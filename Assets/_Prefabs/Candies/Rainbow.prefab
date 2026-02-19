@@ -98,6 +98,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   typeCandy: 1
-  bonusType: 0
+  bonusType: 4
   x: 0
   y: 0
