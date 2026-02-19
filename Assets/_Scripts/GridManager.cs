@@ -1,10 +1,32 @@
 using System.Collections.Generic;
+using System.Collections;
 using System.Linq;
 using DG.Tweening;
 using UnityEngine;
 
 public class GridManager : MonoBehaviour
 {
+    // --- THÊM MỚI: Struct để quản lý bộ ảnh cho từng màu ---
+    [System.Serializable]
+    public struct CandyAssetSet
+    {
+        public string name; // Đặt tên cho dễ nhìn trong Inspector (VD: "Set Đỏ")
+        public Constants.CandyType colorType;
+        public Sprite normalSprite;
+        public Sprite stripedHorizontalSprite; // Sọc ngang
+        public Sprite stripedVerticalSprite;   // Sọc dọc
+        public Sprite wrappedSprite;           // Kẹo gói (Bomb)
+    }
+
+    [Header("Assets Configuration")]
+    // Mảng chứa bộ ảnh cho tất cả các màu
+    [SerializeField] private CandyAssetSet[] candyAssets;
+
+    // Dictionary để tra cứu nhanh (sẽ khởi tạo trong Awake)
+    private Dictionary<Constants.CandyType, CandyAssetSet> assetLookup;
+
+    // Prefab kẹo Cầu Vồng (Vì nó không thuộc màu nào nên để riêng)
+    [SerializeField] private GameObject rainbowCandyPrefab;
     [SerializeField] private GameObject[] prefabCandies;
     [SerializeField] private GameObject[] prefabFxs;
 
@@ -19,19 +41,25 @@ public class GridManager : MonoBehaviour
 
     public void Initialize()
     {
-        width = CONSTANT.WIDTH;
-        height = CONSTANT.HEIGHT;
+        width = Constants.WIDTH;
+        height = Constants.HEIGHT;
         candies = new Candy[width, height];
+
+        assetLookup = new Dictionary<Constants.CandyType, CandyAssetSet>();
+        foreach (var set in candyAssets)
+        {
+            if (!assetLookup.ContainsKey(set.colorType))
+            {
+                assetLookup.Add(set.colorType, set);
+            }
+        }
 
         PositionCamera();
         InitializeGrid();
-        RefillGridUntilNoMatches();
     }
 
     private void PositionCamera()
-    {
-        Camera.main.transform.position = new Vector3((width - 1) * CONSTANT.TILE_SIZE / 2f, (height - 1) * CONSTANT.TILE_SIZE / 2f, -10);
-    }
+        => Camera.main.transform.position = new Vector3((width - 1) * Constants.TILE_SIZE / 2f, (height - 1) * Constants.TILE_SIZE / 2f, -10);
 
     private void InitializeGrid()
     {
@@ -39,7 +67,7 @@ public class GridManager : MonoBehaviour
         {
             for (int y = 0; y < height; y++)
             {
-                SpawnNewCandyAt(x, y);
+                SpawnNewCandyAt(x, y, true);
             }
         }
     }
@@ -73,7 +101,7 @@ public class GridManager : MonoBehaviour
             return;
         }
 
-        candyObj.transform.position = new Vector3(x * CONSTANT.TILE_SIZE, y * CONSTANT.TILE_SIZE, 0);
+        candyObj.transform.position = new Vector3(x * Constants.TILE_SIZE, y * Constants.TILE_SIZE, 0);
         candyObj.transform.SetParent(transform);
 
         Candy candy = candyObj.GetComponent<Candy>();
@@ -89,86 +117,371 @@ public class GridManager : MonoBehaviour
         candies[x, y] = candy;
     }
 
-    public void GetCandyFromWorldPosition(Vector2 worldPos, out int x, out int y)
+    private void SpawnRainbowCandyAt(int x, int y)
     {
-        x = Mathf.RoundToInt(worldPos.x / CONSTANT.TILE_SIZE);
-        y = Mathf.RoundToInt(worldPos.y / CONSTANT.TILE_SIZE);
+        if (!IsValidPosition(x, y))
+            return;
+
+        RemoveCandyAt(x, y);
+
+        GameObject candyObj = Instantiate(rainbowCandyPrefab);
+
+        if (candyObj == null)
+        {
+            Debug.LogError("Failed to spawn rainbow candy");
+            return;
+        }
+
+        candyObj.transform.position = new Vector3(x * Constants.TILE_SIZE, y * Constants.TILE_SIZE, 0);
+        candyObj.transform.SetParent(transform);
+
+        Candy candy = candyObj.GetComponent<Candy>();
+        if (candy == null)
+        {
+            Debug.LogError("Spawned object doesn't have Candy component");
+            Destroy(candyObj);
+            return;
+        }
+
+        candy.Init(x, y);
+        candy.GetComponent<SpriteRenderer>().sortingOrder = candy.y;
+        candies[x, y] = candy;
+    }
+
+    // --- REFACTOR: SPAWN THÔNG MINH ---
+
+    private void SpawnNewCandyAt(int x, int y, bool isInitialSpawn = false)
+    {
+        if (!IsValidPosition(x, y)) return;
+
+        // 1. Trả kẹo cũ về Pool thay vì Destroy (nếu có)
+        if (candies[x, y] != null)
+        {
+            PoolingManager.Instance.Despawn(candies[x, y].gameObject);
+            candies[x, y] = null;
+        }
+
+        // 2. Thuật toán Smart Spawning: Tìm màu an toàn không bị match-3
+        int safeTypeIndex = GetSafeRandomCandyType(x, y);
+
+        // 3. Dùng Object Pooling thay vì Instantiate
+        GameObject candyObj = PoolingManager.Instance.Spawn(prefabCandies[safeTypeIndex]);
+        candyObj.transform.SetParent(transform);
+
+        Candy candy = candyObj.GetComponent<Candy>();
+
+        // Cần truyền Type vào hàm Init (Bạn nhớ cập nhật hàm Init trong class Candy nhé)
+        candy.Init(x, y, (Constants.CandyType)safeTypeIndex);
+        candy.GetComponent<SpriteRenderer>().sortingOrder = y;
+
+        Vector3 targetPos = new Vector3(x * Constants.TILE_SIZE, y * Constants.TILE_SIZE, 0);
+
+        if (isInitialSpawn)
+        {
+            // Bàn cờ lúc đầu hiện ra ngay lập tức
+            candy.transform.position = targetPos;
+        }
+        else
+        {
+            // Nếu là sinh kẹo bù (Refill) lúc đang chơi, sẽ cho sinh ở trên cao ngoài màn hình
+            // (Hoạt ảnh rơi xuống sẽ do hàm Gravity đảm nhiệm ở Bước 5)
+            candy.transform.position = targetPos + Vector3.up * Constants.TILE_SIZE;
+        }
+
+        candies[x, y] = candy;
+    }
+
+    // --- THUẬT TOÁN NE TRÁNH MATCH-3 ---
+    private int GetSafeRandomCandyType(int x, int y)
+    {
+        // Tạo danh sách các ID màu có thể dùng (VD: 0, 1, 2, 3)
+        List<int> availableTypes = new List<int>();
+        for (int i = 0; i < prefabCandies.Length; i++)
+        {
+            availableTypes.Add(i);
+        }
+
+        // Kiểm tra 2 ô bên trái
+        if (x >= 2)
+        {
+            Candy left1 = GetCandyAt(x - 1, y);
+            Candy left2 = GetCandyAt(x - 2, y);
+            if (left1 != null && left2 != null && left1.typeCandy == left2.typeCandy)
+            {
+                availableTypes.Remove((int)left1.typeCandy); // Xóa màu bị trùng khỏi danh sách
+            }
+        }
+
+        // Kiểm tra 2 ô bên dưới
+        if (y >= 2)
+        {
+            Candy down1 = GetCandyAt(x, y - 1);
+            Candy down2 = GetCandyAt(x, y - 2);
+            if (down1 != null && down2 != null && down1.typeCandy == down2.typeCandy)
+            {
+                availableTypes.Remove((int)down1.typeCandy); // Xóa màu bị trùng khỏi danh sách
+            }
+        }
+
+        // Trả về ngẫu nhiên 1 trong số các màu an toàn còn lại
+        int randomIndex = Random.Range(0, availableTypes.Count);
+        return availableTypes[randomIndex];
+    }
+
+    public void GetCandyPositionFromWorldPosition(Vector2 worldPos, out int x, out int y)
+    {
+        x = Mathf.RoundToInt(worldPos.x / Constants.TILE_SIZE);
+        y = Mathf.RoundToInt(worldPos.y / Constants.TILE_SIZE);
     }
 
     public void SwapCandies(Candy candy1, Candy candy2)
     {
-        if (isProcessing)
-            return;
+        if (isProcessing) return;
+        StartCoroutine(SwapRoutine(candy1, candy2));
+    }
 
-        if (candy1 == null || candy2 == null)
-            return;
-
-        if (!AreCandiesAdjacent(candy1, candy2))
-        {
-            Debug.Log("Candies are not adjacent");
-            return;
-        }
-
+    private IEnumerator SwapRoutine(Candy candy1, Candy candy2)
+    {
         isProcessing = true;
-        GameManager.Instance.CurrentState = CONSTANT.GameState.RESOLVING;
+        GameManager.Instance.CurrentState = Constants.GameState.SWAP;
 
-        // Hoán đổi vị trí trong mảng
-        candies[candy1.x, candy1.y] = candy2;
-        candies[candy2.x, candy2.y] = candy1;
+        // Hoán đổi Data
+        SwapCandyData(candy1, candy2);
 
-        // Hoán đổi tọa độ
-        (candy2.x, candy1.x) = (candy1.x, candy2.x);
-        (candy2.y, candy1.y) = (candy1.y, candy2.y);
+        // Hoán đổi Hình ảnh (Animation)
+        Sequence seq = DOTween.Sequence();
+        seq.Join(candy1.transform.DOMove(GetWorldPosition(candy1.x, candy1.y), Constants.SWAP_DURATION));
+        seq.Join(candy2.transform.DOMove(GetWorldPosition(candy2.x, candy2.y), Constants.SWAP_DURATION));
 
-        // Animate swap
-        Vector3 pos1 = new Vector3(candy1.x * CONSTANT.TILE_SIZE, candy1.y * CONSTANT.TILE_SIZE, 0);
-        Vector3 pos2 = new Vector3(candy2.x * CONSTANT.TILE_SIZE, candy2.y * CONSTANT.TILE_SIZE, 0);
+        yield return seq.WaitForCompletion(); // Chờ 2 viên kẹo trượt xong
 
-        Sequence sequence = DOTween.Sequence();
-        sequence.Append(candy1.transform.DOMove(pos1, 0.2f));
-        sequence.Join(candy2.transform.DOMove(pos2, 0.2f));
-        sequence.OnComplete(() => CheckForMatchesAfterSwap(candy1, candy2));
-    }
+        // Kiểm tra xem có tạo ra Match nào không
+        List<Candy> matches1 = new List<Candy>();
+        List<Candy> matches2 = new List<Candy>();
+        CheckForMatchAt(candy1, out matches1, out Constants.BonusType bonus1);
+        CheckForMatchAt(candy2, out matches2, out Constants.BonusType bonus2);
 
-    private bool AreCandiesAdjacent(Candy candy1, Candy candy2)
-    {
-        if (candy1 == null || candy2 == null)
-            return false;
-
-        int dx = Mathf.Abs(candy1.x - candy2.x);
-        int dy = Mathf.Abs(candy1.y - candy2.y);
-
-        return (dx == 1 && dy == 0) || (dx == 0 && dy == 1);
-    }
-
-    private void CheckForMatchesAfterSwap(Candy candy1, Candy candy2)
-    {
-        List<Candy> allMatches = new List<Candy>();
-
-        // Kiểm tra matches từ cả 2 viên kẹo
-        if (CheckForMatchAt(candy1, out List<Candy> matches1))
+        if (matches1.Count >= 3 || matches2.Count >= 3)
         {
-            AddUniqueCandies(allMatches, matches1);
-        }
-
-        if (CheckForMatchAt(candy2, out List<Candy> matches2))
-        {
-            AddUniqueCandies(allMatches, matches2);
-        }
-
-        if (allMatches.Count > 0)
-        {
-            // Có match
-            RemoveMatchedCandies(allMatches);
-
-            // Chờ một chút rồi thực hiện gravity
-            DOVirtual.DelayedCall(0.3f, () => ProcessGravityAndFill());
+            // THÀNH CÔNG: Chuyển sang vòng lặp Nổ -> Rơi -> Nổ
+            StartCoroutine(ProcessMatchesAndGravityRoutine());
         }
         else
         {
-            // Không có match, hoán đổi lại
-            UndoInvalidSwap(candy1, candy2);
+            // THẤT BẠI: Trượt về chỗ cũ
+            SwapCandyData(candy1, candy2);
+
+            Sequence seqBack = DOTween.Sequence();
+            seqBack.Join(candy1.transform.DOMove(GetWorldPosition(candy1.x, candy1.y), Constants.SWAP_DURATION));
+            seqBack.Join(candy2.transform.DOMove(GetWorldPosition(candy2.x, candy2.y), Constants.SWAP_DURATION));
+
+            yield return seqBack.WaitForCompletion();
+
+            // Mở khóa Input
+            isProcessing = false;
+            GameManager.Instance.CurrentState = Constants.GameState.IDLE;
         }
+    }
+
+    private void SwapCandyData(Candy c1, Candy c2)
+    {
+        // Đổi chỗ trong mảng
+        candies[c1.x, c1.y] = c2;
+        candies[c2.x, c2.y] = c1;
+
+        // Đổi tọa độ nội tại
+        int tempX = c1.x; int tempY = c1.y;
+        c1.Init(c2.x, c2.y, c1.typeCandy);
+        c2.Init(tempX, tempY, c2.typeCandy);
+
+        // Chỉnh SortingOrder để lúc trượt không bị đè lỗi
+        c1.GetComponent<SpriteRenderer>().sortingOrder = c1.y;
+        c2.GetComponent<SpriteRenderer>().sortingOrder = c2.y;
+    }
+
+    // --- 2. VÒNG LẶP CỐT LÕI (NỔ -> RƠI -> FILL) ---
+    // Class phụ để gom dữ liệu nổ lại cho gọn
+    private class MatchInfo
+    {
+        public List<Candy> Candies;
+        public Constants.BonusType Bonus;
+        public Candy CenterCandy; // Viên kẹo tâm điểm để sinh kẹo đặc biệt
+    }
+
+    private List<MatchInfo> GetAllMatchesInfo()
+    {
+        List<MatchInfo> allMatches = new List<MatchInfo>();
+        HashSet<Candy> processedCandies = new HashSet<Candy>(); // Tránh 1 vụ nổ bị quét 2 lần
+
+        for (int x = 0; x < width; x++)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                Candy candy = candies[x, y];
+                if (candy != null && !processedCandies.Contains(candy))
+                {
+                    if (CheckForMatchAt(candy, out List<Candy> matchedCandies, out Constants.BonusType bonus))
+                    {
+                        MatchInfo info = new MatchInfo
+                        {
+                            Candies = matchedCandies,
+                            Bonus = bonus,
+                            CenterCandy = candy
+                        };
+                        allMatches.Add(info);
+
+                        // Đánh dấu các viên này đã được tính toán để vòng for không quét lại
+                        foreach (var c in matchedCandies) processedCandies.Add(c);
+                    }
+                }
+            }
+        }
+        return allMatches;
+    }
+
+    // Hàm Helper để lấy Sprite dựa trên màu và loại bonus
+    private Sprite GetBonusSprite(Constants.CandyType color, Constants.BonusType bonus)
+    {
+        if (!assetLookup.ContainsKey(color)) return null;
+
+        CandyAssetSet set = assetLookup[color];
+        switch (bonus)
+        {
+            case Constants.BonusType.ROW_CLEAR: return set.stripedHorizontalSprite;
+            case Constants.BonusType.COLUMN_CLEAR: return set.stripedVerticalSprite;
+            case Constants.BonusType.BOMB: return set.wrappedSprite;
+            default: return set.normalSprite;
+        }
+    }
+    private IEnumerator ProcessMatchesAndGravityRoutine()
+    {
+        bool hasMatches = true;
+
+        while (hasMatches)
+        {
+            List<MatchInfo> matchInfos = GetAllMatchesInfo();
+
+            if (matchInfos.Count > 0)
+            {
+                foreach (MatchInfo info in matchInfos)
+                {
+                    // XỬ LÝ KẸO ĐẶC BIỆT
+                    if (info.Bonus != Constants.BonusType.NONE)
+                    {
+                        // Trường hợp Kẹo Cầu Vồng (Rainbow) - Xử lý riêng vì nó là prefab khác hẳn
+                        if (info.Bonus == Constants.BonusType.RAINBOW)
+                        {
+                            // Với cầu vồng thì bắt buộc phải thay Prefab vì nó không có màu sắc cụ thể
+                            SpawnRainbowCandyAt(info.CenterCandy.x, info.CenterCandy.y);
+                            // Viên cũ vẫn nằm trong list info.Candies nên sẽ bị xóa bên dưới
+                        }
+                        else
+                        {
+                            // Trường hợp Kẹo Sọc / Kẹo Gói -> THAY SPRITE
+                            Sprite newSprite = GetBonusSprite(info.CenterCandy.typeCandy, info.Bonus);
+                            if (newSprite != null)
+                            {
+                                // Gọi hàm biến hình trên viên kẹo
+                                info.CenterCandy.UpgradeToBonus(info.Bonus, newSprite);
+                            }
+
+                            // QUAN TRỌNG: Loại viên kẹo này khỏi danh sách xóa
+                            info.Candies.Remove(info.CenterCandy);
+                        }
+                    }
+
+                    // Xóa các viên còn lại
+                    RemoveMatchedCandies(info.Candies);
+                }
+
+                yield return new WaitForSeconds(0.2f);
+                yield return StartCoroutine(ApplyGravityAndRefillRoutine());
+                yield return new WaitForSeconds(0.1f);
+            }
+            else
+            {
+                hasMatches = false;
+            }
+        }
+
+        isProcessing = false;
+        GameManager.Instance.CurrentState = Constants.GameState.IDLE;
+    }
+
+    // --- 3. TRỌNG LỰC (GRAVITY CHUẨN CANDY CRUSH) ---
+    private IEnumerator ApplyGravityAndRefillRoutine()
+    {
+        bool isAnimating = false;
+        float maxFallTime = 0.3f; // Cài đặt 1 thời gian rơi chung để tất cả chạm đất cùng lúc
+
+        // Quét từng cột
+        for (int x = 0; x < width; x++)
+        {
+            int emptySpaces = 0; // Đếm số lỗ hổng
+
+            // --- BƯỚC A: KÉO KẸO CŨ XUỐNG ---
+            for (int y = 0; y < height; y++)
+            {
+                if (candies[x, y] == null)
+                {
+                    emptySpaces++;
+                }
+                else if (emptySpaces > 0)
+                {
+                    // Dịch chuyển Data kẹo cũ xuống
+                    Candy candy = candies[x, y];
+                    int newY = y - emptySpaces;
+
+                    candies[x, newY] = candy;
+                    candies[x, y] = null;
+
+                    candy.Init(x, newY, candy.typeCandy);
+                    candy.GetComponent<SpriteRenderer>().sortingOrder = newY;
+
+                    // Bắt đầu Animation rơi của kẹo cũ
+                    candy.transform.DOMove(GetWorldPosition(x, newY), maxFallTime).SetEase(Ease.InQuad);
+                    isAnimating = true;
+                }
+            }
+
+            // --- BƯỚC B: BÙ KẸO MỚI NỐI ĐUÔI ---
+            // Số lượng kẹo thiếu chính là emptySpaces. Ta đẻ kẹo mới trên trời và cho rơi xuống
+            for (int i = 0; i < emptySpaces; i++)
+            {
+                int targetY = height - emptySpaces + i; // Vị trí cuối cùng nó cần nằm trên lưới
+
+                // Lấy kẹo từ Pool
+                int randomType = Random.Range(0, prefabCandies.Length);
+                GameObject candyObj = PoolingManager.Instance.Spawn(prefabCandies[randomType]);
+                candyObj.transform.SetParent(transform);
+
+                Candy candy = candyObj.GetComponent<Candy>();
+                candy.Init(x, targetY, (Constants.CandyType)randomType);
+                candy.GetComponent<SpriteRenderer>().sortingOrder = targetY;
+
+                candies[x, targetY] = candy;
+
+                // Đặt kẹo mới ở ngoài màn hình (xếp hàng nối đuôi nhau chờ rơi)
+                float spawnY = height + i;
+                candy.transform.position = GetWorldPosition(x, (int)spawnY);
+
+                // Bắt đầu Animation rơi của kẹo mới (Chạy song song với kẹo cũ vì không có lệnh yield cản lại)
+                candy.transform.DOMove(GetWorldPosition(x, targetY), maxFallTime).SetEase(Ease.InQuad);
+                isAnimating = true;
+            }
+        }
+
+        // --- BƯỚC C: CHỜ TẤT CẢ RƠI XONG ---
+        // Chỉ đặt duy nhất 1 lệnh yield ở cuối cùng để khóa vòng lặp chờ hoạt ảnh hoàn tất
+        if (isAnimating)
+        {
+            yield return new WaitForSeconds(maxFallTime);
+        }
+    }
+
+    private Vector3 GetWorldPosition(int x, int y)
+    {
+        return new Vector3(x * Constants.TILE_SIZE, y * Constants.TILE_SIZE, 0);
     }
 
     private void RemoveMatchedCandies(List<Candy> matches)
@@ -179,16 +492,16 @@ public class GridManager : MonoBehaviour
             RemoveCandy(candy);
             switch (candy.typeCandy)
             {
-                case CONSTANT.TypeCandy.PURPLE:
+                case Constants.CandyType.PURPLE:
                     id = 0;
                     break;
-                case CONSTANT.TypeCandy.GREEN:
+                case Constants.CandyType.GREEN:
                     id = 1;
                     break;
-                case CONSTANT.TypeCandy.BLUE:
+                case Constants.CandyType.BLUE:
                     id = 2;
                     break;
-                case CONSTANT.TypeCandy.YELLOW:
+                case Constants.CandyType.YELLOW:
                     id = 3;
                     break;
             }
@@ -199,31 +512,6 @@ public class GridManager : MonoBehaviour
             }
 
         }
-    }
-
-    private void UndoInvalidSwap(Candy candy1, Candy candy2)
-    {
-        Debug.Log("No match found, swapping back");
-
-        // Hoán đổi lại
-        candies[candy1.x, candy1.y] = candy2;
-        candies[candy2.x, candy2.y] = candy1;
-
-        (candy2.x, candy1.x) = (candy1.x, candy2.x);
-        (candy2.y, candy1.y) = (candy1.y, candy2.y);
-
-        // Animate swap back
-        Vector3 pos1 = new Vector3(candy1.x * CONSTANT.TILE_SIZE, candy1.y * CONSTANT.TILE_SIZE, 0);
-        Vector3 pos2 = new Vector3(candy2.x * CONSTANT.TILE_SIZE, candy2.y * CONSTANT.TILE_SIZE, 0);
-
-        Sequence sequence = DOTween.Sequence();
-        sequence.Append(candy1.transform.DOMove(pos1, 0.2f));
-        sequence.Join(candy2.transform.DOMove(pos2, 0.2f));
-        sequence.OnComplete(() =>
-        {
-            isProcessing = false;
-            GameManager.Instance.CurrentState = CONSTANT.GameState.IDLE;
-        });
     }
 
     private void RemoveCandyAt(int x, int y)
@@ -253,17 +541,67 @@ public class GridManager : MonoBehaviour
         }
     }
 
-    public bool CheckForMatchAt(Candy candy, out List<Candy> matchedCandies)
+    // Thêm out bonusType để biết match này sẽ đẻ ra kẹo gì
+    public bool CheckForMatchAt(Candy candy, out List<Candy> matchedCandies, out Constants.BonusType bonusToSpawn)
     {
         matchedCandies = new List<Candy>();
+        bonusToSpawn = Constants.BonusType.NONE;
 
-        if (candy == null)
-            return false;
+        if (candy == null) return false;
 
-        CheckHorizontalMatches(candy, matchedCandies);
-        CheckVerticalMatches(candy, matchedCandies);
+        List<Candy> horMatches = new List<Candy>();
+        List<Candy> verMatches = new List<Candy>();
 
-        return matchedCandies.Count >= 3;
+        horMatches.Add(candy);
+        verMatches.Add(candy);
+
+        // Check Ngang
+        CheckDirection(candy, -1, 0, horMatches); // Trái
+        CheckDirection(candy, 1, 0, horMatches);  // Phải
+
+        // Check Dọc
+        CheckDirection(candy, 0, -1, verMatches); // Dưới
+        CheckDirection(candy, 0, 1, verMatches);  // Trên
+
+        bool hasHor = horMatches.Count >= 3;
+        bool hasVer = verMatches.Count >= 3;
+
+        if (!hasHor && !hasVer) return false;
+
+        // --- BẮT ĐẦU NHẬN DIỆN HÌNH DÁNG ---
+
+        if (horMatches.Count >= 5 || verMatches.Count >= 5)
+        {
+            // Nối 5 thẳng hàng -> Kẹo Cầu Vồng
+            bonusToSpawn = Constants.BonusType.RAINBOW;
+            AddUniqueCandies(matchedCandies, hasHor ? horMatches : verMatches);
+        }
+        else if (hasHor && hasVer)
+        {
+            // Nối có góc vuông (Chữ L, Chữ T) -> Kẹo Gói (BOMB)
+            bonusToSpawn = Constants.BonusType.BOMB;
+            AddUniqueCandies(matchedCandies, horMatches);
+            AddUniqueCandies(matchedCandies, verMatches);
+        }
+        else if (horMatches.Count == 4)
+        {
+            // Nối 4 ngang -> Kẹo sọc dọc (Phá cột)
+            bonusToSpawn = Constants.BonusType.COLUMN_CLEAR;
+            AddUniqueCandies(matchedCandies, horMatches);
+        }
+        else if (verMatches.Count == 4)
+        {
+            // Nối 4 dọc -> Kẹo sọc ngang (Phá hàng)
+            bonusToSpawn = Constants.BonusType.ROW_CLEAR;
+            AddUniqueCandies(matchedCandies, verMatches);
+        }
+        else
+        {
+            // Nối 3 bình thường
+            AddUniqueCandies(matchedCandies, hasHor ? horMatches : verMatches);
+        }
+
+        return true;
     }
 
     private void CheckHorizontalMatches(Candy candy, List<Candy> matchedCandies)
@@ -318,6 +656,8 @@ public class GridManager : MonoBehaviour
             if (nextCandy == null || nextCandy.typeCandy != startCandy.typeCandy)
                 break;
 
+            if (nextY >= 9 || dirY >= 9) // Chỉ kiểm tra trong phần hiển thị
+                break;
             matches.Add(nextCandy);
             current = nextCandy;
         }
@@ -332,7 +672,7 @@ public class GridManager : MonoBehaviour
             for (int y = 0; y < height; y++)
             {
                 Candy candy = candies[x, y];
-                if (candy != null && CheckForMatchAt(candy, out List<Candy> matchedCandies))
+                if (candy != null && CheckForMatchAt(candy, out List<Candy> matchedCandies, out Constants.BonusType bonus))
                 {
                     AddUniqueCandies(allMatchedCandies, matchedCandies);
                 }
@@ -366,218 +706,4 @@ public class GridManager : MonoBehaviour
         return false;
     }
 
-    private void RefillGridUntilNoMatches()
-    {
-        List<Candy> matchedCandies = GetAllMatches();
-
-        while (matchedCandies.Count > 0)
-        {
-            matchedCandies.ForEach(x => RemoveCandy(x));
-            RefillEmptyCells();
-            matchedCandies = GetAllMatches();
-        }
-    }
-
-    private void RefillEmptyCells()
-    {
-        for (int x = 0; x < width; x++)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                if (candies[x, y] == null)
-                {
-                    SpawnNewCandyAt(x, y);
-                }
-            }
-        }
-    }
-
-    private void ProcessGravityAndFill()
-    {
-        ApplyGravity();
-        FillTopCells();
-
-        // Kiểm tra matches sau khi rơi
-        DOVirtual.DelayedCall(0.4f, () => CheckMatchesAfterGravity());
-    }
-
-    private void ApplyGravity()
-    {
-        for (int x = 0; x < width; x++)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                if (candies[x, y] == null)
-                {
-                    // Tìm kẹo phía trên để rơi xuống
-                    for (int k = y + 1; k < height; k++)
-                    {
-                        Candy candyAbove = candies[x, k];
-                        if (candyAbove != null)
-                        {
-                            MoveCandyDown(candyAbove, x, y);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private void MoveCandyDown(Candy candy, int newX, int newY)
-    {
-        if (candy == null)
-            return;
-
-        int oldX = candy.x;
-        int oldY = candy.y;
-
-        // Cập nhật mảng
-        candies[oldX, oldY] = null;
-        candies[newX, newY] = candy;
-
-        // Cập nhật vị trí candy
-        candy.Init(newX, newY);
-        candy.GetComponent<SpriteRenderer>().sortingOrder = candy.y;
-
-        // Di chuyển với animation
-        candy.transform.DOMove(
-            new Vector3(newX * CONSTANT.TILE_SIZE, newY * CONSTANT.TILE_SIZE, 0),
-            0.2f
-        );
-    }
-
-    private void FillTopCells()
-    {
-        // Fill tất cả các ô trống
-        for (int x = 0; x < width; x++)
-        {
-            int emptyCount = 0;
-
-            // Đếm và fill từ dưới lên trên
-            for (int y = 0; y < height; y++)
-            {
-                if (candies[x, y] == null)
-                {
-                    emptyCount++;
-                }
-            }
-
-            // Fill candy mới từ trên xuống
-            for (int y = height - 1; y >= 0; y--)
-            {
-                if (candies[x, y] == null)
-                {
-                    // Tạo candy mới
-                    int randomIndex = Random.Range(0, prefabCandies.Length);
-                    GameObject candyObj = Instantiate(prefabCandies[randomIndex]);
-
-                    candyObj.transform.SetParent(transform);
-
-                    // Spawn từ trên cùng với offset
-                    float spawnHeight = height + (height - y);
-                    candyObj.transform.position = new Vector3(x * CONSTANT.TILE_SIZE, spawnHeight * CONSTANT.TILE_SIZE, 0);
-
-                    Candy candy = candyObj.GetComponent<Candy>();
-                    candy.Init(x, y);
-                    candy.GetComponent<SpriteRenderer>().sortingOrder = candy.y;
-                    candies[x, y] = candy;
-
-                    candy.transform.DOMove(
-                        new Vector3(x * CONSTANT.TILE_SIZE, y * CONSTANT.TILE_SIZE, 0),
-                        0.2f
-                    );
-                }
-            }
-        }
-    }
-    private void CheckMatchesAfterGravity()
-    {
-        List<Candy> newMatches = GetAllMatches();
-
-        if (newMatches.Count > 0)
-        {
-            RemoveMatchedCandies(newMatches);
-            DOVirtual.DelayedCall(0.3f, () => ProcessGravityAndFill());
-        }
-        else
-        {
-            // Kết thúc
-            isProcessing = false;
-            GameManager.Instance.CurrentState = CONSTANT.GameState.IDLE;
-        }
-    }
 }
-
-// using System.Collections.Generic;
-// using System.Linq;
-// using DG.Tweening;
-// using UnityEngine;
-
-// class GridManager : MonoBehaviour
-// {
-//     public Candy[,] candies;
-//     public GameObject[] prefabCandy;
-//     private int width;
-//     private int height;
-
-//     public void Init()
-//     {
-//         width = CONSTANT.WIDTH;
-//         height = CONSTANT.HEIGHT;
-//         candies = new Candy[width, height];
-
-//         for (int x = 0; x < width; x++)
-//         {
-//             for (int y = 0; y < height; y++)
-//             {
-//                 GameObject candyObj = Instantiate(prefabCandy[Random.Range(0, prefabCandy.Length)]);
-//                 Candy candy = candyObj.GetComponent<Candy>();
-//                 //
-//                 candies[x, y] = candy;
-//                 candy.Init(x, y);
-
-//                 candyObj.transform.position = new Vector3(x * CONSTANT.TILE_SIZE, y * CONSTANT.TILE_SIZE, 0);
-//                 candyObj.transform.SetParent(this.transform);
-
-//                 Camera.main.transform.position = new Vector3((width - 1) * CONSTANT.TILE_SIZE / 2f, (height - 1) * CONSTANT.TILE_SIZE / 2f, -10);
-//             }
-//         }
-//     }
-
-//     public Candy GetCandyAt(Vector3 worldPos, out int x, out int y)
-//     {
-//         x = Mathf.RoundToInt(worldPos.x / CONSTANT.TILE_SIZE);
-//         y = Mathf.RoundToInt(worldPos.y / CONSTANT.TILE_SIZE);
-
-//         return candies[x, y];
-//     }
-
-//     public Candy GetCandy(int x, int y)
-//     {
-//         return candies[x, y];
-//     }
-
-//     public void SwapCandies(Candy candy1, Candy candy2)
-//     {
-//         if (candy1 == null || candy2 == null)
-//             return;
-
-//         // Hoán đổi vị trí trong mảng
-//         candies[candy1.x, candy1.y] = candy2;
-//         candies[candy2.x, candy2.y] = candy1;
-
-//         // Hoán đổi tọa độ
-//         (candy2.x, candy1.x) = (candy1.x, candy2.x);
-//         (candy2.y, candy1.y) = (candy1.y, candy2.y);
-
-//         // Hoan doi vi tri
-//         Vector3 pos1 = new Vector3(candy1.x * CONSTANT.TILE_SIZE, candy1.y * CONSTANT.TILE_SIZE, 0);
-//         Vector3 pos2 = new Vector3(candy2.x * CONSTANT.TILE_SIZE, candy2.y * CONSTANT.TILE_SIZE, 0);
-
-//         candy1.transform.position = pos1;
-//         candy2.transform.position = pos2;
-//     }
-
-
-// }
