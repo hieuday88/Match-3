@@ -361,6 +361,27 @@ public class GridManager : MonoBehaviour
 
                 foreach (MatchInfo info in matchInfos)
                 {
+                    // ==========================================================
+                    // BẢN VÁ LỖI TÂM ĐIỂM: CĂN GIỮA CHO KẸO RƠI TỰ DO
+                    // ==========================================================
+                    // Nếu viên kẹo này KHÔNG PHẢI do người chơi chủ động vuốt
+                    if (info.CenterCandy != swappedCandy1 && info.CenterCandy != swappedCandy2)
+                    {
+                        // Chỉ căn giữa cho kẹo thẳng (Sọc, Cầu vồng). 
+                        // Riêng Kẹo Gói (BOMB) thì tâm của nó mặc định đã nằm chuẩn ở góc vuông rồi.
+                        if (info.Bonus == Constants.BonusType.ROW_CLEAR ||
+                            info.Bonus == Constants.BonusType.COLUMN_CLEAR ||
+                            info.Bonus == Constants.BonusType.RAINBOW)
+                        {
+                            // Mẹo toán học: Sắp xếp theo (x + y) sẽ tự xếp thẳng hàng cho cả trục dọc lẫn ngang
+                            var sortedCandies = info.Candies.OrderBy(c => c.x + c.y).ToList();
+
+                            // Bốc viên kẹo nằm ở chính giữa danh sách làm tâm mới
+                            info.CenterCandy = sortedCandies[sortedCandies.Count / 2];
+                        }
+                    }
+                    // ==========================================================
+
                     // --- NẾU LÀ TẠO KẸO ĐẶC BIỆT -> CHẠY HOẠT ẢNH HÚT KẸO ---
                     if (info.Bonus != Constants.BonusType.NONE)
                     {
@@ -371,15 +392,30 @@ public class GridManager : MonoBehaviour
                         {
                             if (c != info.CenterCandy)
                             {
-                                // 1. Gỡ kẹo ra khỏi Data ngay lập tức để tẹo nữa rớt kẹo cho chuẩn
-                                candies[c.x, c.y] = null;
+                                // --- BẢN VÁ LỖI: KIỂM TRA KẸO ĐẶC BIỆT ---
+                                if (c.bonusType != Constants.BonusType.NONE)
+                                {
+                                    // Kẹo này là kẹo đặc biệt từ trước! KHÔNG HÚT NÓ!
+                                    // Ném nó vào danh sách nổ để lát nữa Động cơ nổ dây chuyền kích hoạt nó
+                                    initialDestruction.Add(c);
+                                }
+                                else
+                                {
+                                    // Là kẹo thường -> Hút vào tâm và biến mất
+                                    // 1. Gỡ kẹo ra khỏi Data ngay lập tức
+                                    candies[c.x, c.y] = null;
 
-                                // 2. Animation: Bay hút vào tâm và teo nhỏ lại
-                                c.transform.DOMove(centerPos, 0.25f).SetEase(Ease.InBack);
-                                c.transform.DOScale(Vector3.zero, 0.25f).SetEase(Ease.InBack);
+                                    // 2. Animation: Bay hút vào tâm và teo nhỏ lại
+                                    c.transform.DOMove(centerPos, 0.25f).SetEase(Ease.InBack);
+                                    c.transform.DOScale(Vector3.zero, 0.25f).SetEase(Ease.InBack).OnComplete(() =>
+                                    {
+                                        c.transform.DOKill();
+                                        Destroy(c.gameObject);
+                                    });
 
-                                // 3. Xóa xác GameObject sau khi bay xong (0.25s)
-                                Destroy(c.gameObject, 0.3f);
+                                    // 3. Xóa xác GameObject sau khi bay xong
+                                    Destroy(c.gameObject, 0.3f);
+                                }
                             }
                         }
 
@@ -446,16 +482,19 @@ public class GridManager : MonoBehaviour
         GameManager.Instance.CurrentState = Constants.GameState.IDLE;
     }
 
-    // --- 3. TRỌNG LỰC (GRAVITY CHUẨN CANDY CRUSH) ---
+    // --- 3. TRỌNG LỰC (VẬT LÝ RƠI TỰ DO) ---
     private IEnumerator ApplyGravityAndRefillRoutine()
     {
         bool isAnimating = false;
-        float maxFallTime = 0.5f; // Cài đặt 1 thời gian rơi chung để tất cả chạm đất cùng lúc
+        float maxCalculatedTime = 0f;
 
-        // Quét từng cột
+        // Gia tốc trọng trường (Càng to rơi càng nhanh, bạn có thể tinh chỉnh 30-50 tùy ý)
+        float gravity = 100f;
+        float bounceTime = 0.04f;   // Thời gian nảy
+
         for (int x = 0; x < width; x++)
         {
-            int emptySpaces = 0; // Đếm số lỗ hổng
+            int emptySpaces = 0;
 
             // --- BƯỚC A: KÉO KẸO CŨ XUỐNG ---
             for (int y = 0; y < height; y++)
@@ -466,7 +505,6 @@ public class GridManager : MonoBehaviour
                 }
                 else if (emptySpaces > 0)
                 {
-                    // Dịch chuyển Data kẹo cũ xuống
                     Candy candy = candies[x, y];
                     int newY = y - emptySpaces;
 
@@ -476,23 +514,27 @@ public class GridManager : MonoBehaviour
                     candy.Init(x, newY, candy.typeCandy);
                     candy.GetComponent<SpriteRenderer>().sortingOrder = newY;
 
-                    // Bắt đầu Animation rơi của kẹo cũ
-                    candy.transform.DOMove(GetWorldPosition(x, newY), maxFallTime).SetEase(Ease.OutBounce, 5f);
+                    // Tính khoảng cách và áp dụng công thức t = sqrt(2S/g)
+                    float distance = y - newY;
+                    float fallTime = Mathf.Sqrt((2f * distance) / gravity);
+                    if (fallTime > maxCalculatedTime) maxCalculatedTime = fallTime;
+
+                    Vector3 targetPos = GetWorldPosition(x, newY);
+
+                    // Xây dựng chuỗi hoạt ảnh: Rơi (InQuad) -> Đập đất nảy lên (OutQuad) -> Rớt xuống lại (InQuad)
+                    candy.transform.DOMove(targetPos, fallTime).SetEase(Ease.InQuad);
                     isAnimating = true;
                 }
             }
 
-            // --- BƯỚC B: BÙ KẸO MỚI NỐI ĐUÔI ---
-            // Số lượng kẹo thiếu chính là emptySpaces. Ta đẻ kẹo mới trên trời và cho rơi xuống
+            // --- BƯỚC B: BÙ KẸO MỚI TỪ TRÊN TRỜI RƠI XUỐNG ---
             for (int i = 0; i < emptySpaces; i++)
             {
                 int targetY = height - emptySpaces + i;
 
-                // Lấy random một màu từ mảng cấu hình
                 Constants.CandyType randomType = candyAssets[Random.Range(0, candyAssets.Length)].colorType;
                 GameObject prefabToSpawn = assetLookup[randomType].prefab;
 
-                // Lấy kẹo từ Pool
                 GameObject candyObj = PoolingManager.Instance.Spawn(prefabToSpawn);
                 candyObj.transform.SetParent(transform);
 
@@ -502,21 +544,26 @@ public class GridManager : MonoBehaviour
 
                 candies[x, targetY] = candy;
 
-                // Đặt kẹo mới ở ngoài màn hình (xếp hàng nối đuôi nhau chờ rơi)
-                float spawnY = height + i;
+                // Đặt kẹo mới ở ngoài màn hình (xếp hàng cao tít mù khơi)
+                float spawnY = height + i + 1;
                 candy.transform.position = GetWorldPosition(x, (int)spawnY);
+                Vector3 targetPos = GetWorldPosition(x, targetY);
 
-                // Bắt đầu Animation rơi của kẹo mới (Chạy song song với kẹo cũ vì không có lệnh yield cản lại)
-                candy.transform.DOMove(GetWorldPosition(x, targetY), maxFallTime).SetEase(Ease.OutBounce, 5f);
+                // Tính thời gian rơi cho kẹo mới
+                float distance = spawnY - targetY;
+                float fallTime = Mathf.Sqrt((2f * distance) / gravity);
+                if (fallTime > maxCalculatedTime) maxCalculatedTime = fallTime;
+
+                candy.transform.DOMove(targetPos, fallTime).SetEase(Ease.InQuad);
                 isAnimating = true;
             }
         }
 
-        // --- BƯỚC C: CHỜ TẤT CẢ RƠI XONG ---
-        // Chỉ đặt duy nhất 1 lệnh yield ở cuối cùng để khóa vòng lặp chờ hoạt ảnh hoàn tất
+        // --- BƯỚC C: CHỜ TẤT CẢ RƠI & NẢY XONG ---
         if (isAnimating)
         {
-            yield return new WaitForSeconds(maxFallTime);
+            // Chờ thời gian rơi của viên rơi lâu nhất + tổng thời gian của 2 nhịp nảy
+            yield return new WaitForSeconds(maxCalculatedTime + (bounceTime * 2));
         }
     }
 
@@ -579,6 +626,7 @@ public class GridManager : MonoBehaviour
         Candy candy = candies[x, y];
         if (candy != null)
         {
+            candy.transform.DOKill();
             Destroy(candy.gameObject);
             candies[x, y] = null;
         }
