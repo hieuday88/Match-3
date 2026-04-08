@@ -11,23 +11,24 @@ public class PoolingManager : Singleton<PoolingManager>
 
     public GameObject Spawn(GameObject prefab, Vector3 pos, Quaternion rot, Transform parent = null)
     {
-        if (!_pools.ContainsKey(prefab))
+        if (!_pools.TryGetValue(prefab, out Pool pool))
         {
-            // Tạo Pool mới (Pool class không còn là MonoBehaviour)
-            _pools.Add(prefab, new Pool(prefab));
+            pool = new Pool(prefab);
+            _pools.Add(prefab, pool);
         }
 
         // Lấy object từ pool
-        GameObject instance = _pools[prefab].Get();
+        GameObject instance = pool.Get();
 
         // Thiết lập vị trí/xoay
         instance.transform.SetPositionAndRotation(pos, rot);
         instance.transform.SetParent(parent);
 
         // Lưu vết: Object này (ID) thuộc về Prefab này
-        if (!_instanceToPrefab.ContainsKey(instance.GetInstanceID()))
+        int instanceID = instance.GetInstanceID();
+        if (!_instanceToPrefab.ContainsKey(instanceID))
         {
-            _instanceToPrefab.Add(instance.GetInstanceID(), prefab);
+            _instanceToPrefab.Add(instanceID, prefab);
         }
 
         return instance;
@@ -48,8 +49,9 @@ public class PoolingManager : Singleton<PoolingManager>
 
     public void Despawn(GameObject instance)
     {
+        int instanceID = instance.GetInstanceID();
 
-        if (_instanceToPrefab.TryGetValue(instance.GetInstanceID(), out GameObject prefab))
+        if (_instanceToPrefab.TryGetValue(instanceID, out GameObject prefab))
         {
             // Tìm thấy prefab gốc, trả về đúng pool của nó
             if (_pools.TryGetValue(prefab, out Pool pool))

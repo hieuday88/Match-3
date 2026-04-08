@@ -1918,7 +1918,7 @@ MonoBehaviour:
     stripedVerticalSprite: {fileID: -1440353266, guid: 2ea71ef6fb861914c840b86c4f67e564, type: 3}
     wrappedSprite: {fileID: 1146098524, guid: 2ea71ef6fb861914c840b86c4f67e564, type: 3}
   rainbowCandyPrefab: {fileID: 960527269981797593, guid: 12b33c7e417b90745b64e647c065a2d0, type: 3}
-  lightningPrefab: {fileID: 2864077407095281544, guid: f52e6ddceeb492f4c88766ee13c58b21, type: 3}
+  lightningPrefab: {fileID: 1281900193509586, guid: 46df123f4d7194c8ab9512e8aa5ee078, type: 3}
 --- !u!114 &813988616
 MonoBehaviour:
   m_ObjectHideFlags: 0

@@ -7,6 +7,11 @@ public static class Constants
 
     // --- CÀI ĐẶT HOẠT ẢNH ---
     public const float SWAP_DURATION = 0.2f; // Thời gian trượt kẹo (giúp đồng bộ mọi nơi)
+    public const float AUTO_PLAY_STEP_DELAY = 0.15f;
+    public const float HINT_PULSE_DURATION = 0.5f;
+    public const float HINT_IDLE_DELAY_SECONDS = 5f;
+    public const float HINT_REPEAT_COOLDOWN_SECONDS = 2f;
+    public const int HINT_FAILED_SWAP_THRESHOLD = 2;
 
     // --- PHÂN LOẠI KẸO ---
     public enum CandyType

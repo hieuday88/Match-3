@@ -8,12 +8,11 @@ public class Candy : MonoBehaviour
     public int x;
     public int y;
 
+    private SpriteRenderer spriteRenderer;
     public Candy Left => x > 0 ? GameManager.Instance.gridManager.candies[x - 1, y] : null;
     public Candy Right => x < Constants.WIDTH - 1 ? GameManager.Instance.gridManager.candies[x + 1, y] : null;
     public Candy Up => y < Constants.HEIGHT - 1 ? GameManager.Instance.gridManager.candies[x, y + 1] : null;
     public Candy Down => y > 0 ? GameManager.Instance.gridManager.candies[x, y - 1] : null;
-
-    private SpriteRenderer spriteRenderer;
 
     private void Awake()
     {
@@ -56,4 +55,6 @@ public class Candy : MonoBehaviour
         this.y = y;
         this.typeCandy = type;
     }
+
+    public SpriteRenderer GetSpriteRenderer() => spriteRenderer;
 }
